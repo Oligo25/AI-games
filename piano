@@ -1,0 +1,253 @@
+  "use client"
+
+import React, { useState, useEffect, useCallback, useRef } from 'react'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Button } from "@/components/ui/button"
+import { SONGS, NOTES_TO_NUMBERS } from './songs'
+
+const NOTES = [
+  { note: 'C', freq: 261.63, key: '1', color: 'bg-red-400' },
+  { note: 'D', freq: 293.66, key: '2', color: 'bg-orange-400' },
+  { note: 'E', freq: 329.63, key: '3', color: 'bg-yellow-400' },
+  { note: 'F', freq: 349.23, key: '4', color: 'bg-green-400' },
+  { note: 'G', freq: 392.00, key: '5', color: 'bg-blue-400' },
+  { note: 'A', freq: 440.00, key: '6', color: 'bg-indigo-400' },
+  { note: 'B', freq: 493.88, key: '7', color: 'bg-purple-400' },
+  { note: 'C2', freq: 523.25, key: '8', color: 'bg-pink-400' },
+]
+
+export default function PianoKeyboard() {
+  const [audioContext, setAudioContext] = useState<AudioContext | null>(null)
+  const [activeNotes, setActiveNotes] = useState<Map<string, number>>(new Map())
+  const [selectedSong, setSelectedSong] = useState<string | null>(null)
+  const [isPlaying, setIsPlaying] = useState(false)
+  const [currentNoteIndex, setCurrentNoteIndex] = useState(-1)
+  const [isGuidedMode, setIsGuidedMode] = useState(false)
+  const [waitingForUserInput, setWaitingForUserInput] = useState(false)
+  const timeoutIdRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    setAudioContext(new (window.AudioContext || (window as any).webkitAudioContext)())
+  }, [])
+
+  const playNote = useCallback((freq: number, duration: number = 625) => {
+    if (audioContext) {
+      const oscillator = audioContext.createOscillator()
+      oscillator.type = 'sine'
+      oscillator.frequency.setValueAtTime(freq, audioContext.currentTime)
+      
+      const gainNode = audioContext.createGain()
+      gainNode.gain.setValueAtTime(0.2, audioContext.currentTime)
+      gainNode.gain.linearRampToValueAtTime(0, audioContext.currentTime + duration / 1000)
+      
+      oscillator.connect(gainNode)
+      gainNode.connect(audioContext.destination)
+      
+      oscillator.start()
+      oscillator.stop(audioContext.currentTime + duration / 1000)
+    }
+  }, [audioContext])
+
+  const handleNotePlay = useCallback((note: string, freq: number) => {
+    playNote(freq)
+    setActiveNotes(prev => {
+      const newMap = new Map(prev)
+      const count = (newMap.get(note) || 0) + 1
+      newMap.set(note, count)
+      return newMap
+    })
+    setTimeout(() => setActiveNotes(prev => {
+      const newMap = new Map(prev)
+      const count = newMap.get(note)
+      if (count && count > 1) {
+        newMap.set(note, count - 1)
+      } else {
+        newMap.delete(note)
+      }
+      return newMap
+    }), 625)
+
+    if (isGuidedMode && waitingForUserInput && selectedSong) {
+      const songNotes = SONGS[selectedSong as keyof typeof SONGS]
+      if (note === songNotes[currentNoteIndex]) {
+        setWaitingForUserInput(false)
+        // 移除這裡的 playNextNote() 調用
+        // 改為設置一個短暫的延遲後再播放下一個音符
+        setTimeout(() => {
+          playNextNote()
+        }, 300) // 300毫秒的延遲，可以根據需要調整
+      }
+    }
+  }, [playNote, isGuidedMode, waitingForUserInput, selectedSong, currentNoteIndex])
+
+  const playNextNote = useCallback(() => {
+    if (selectedSong) {
+      const songNotes = SONGS[selectedSong as keyof typeof SONGS]
+      const nextIndex = currentNoteIndex + 1
+      if (nextIndex < songNotes.length) {
+        setCurrentNoteIndex(nextIndex)
+        const noteObj = NOTES.find(n => n.note === songNotes[nextIndex])
+        if (noteObj) {
+          // 添加一個短暫的延遲後再播放下一個音符
+          setTimeout(() => {
+            playNote(noteObj.freq)
+            setWaitingForUserInput(true)
+          }, 300) // 300毫秒的延遲，可以根據需要調整
+        }
+      } else {
+        setIsPlaying(false)
+        setCurrentNoteIndex(-1)
+        setWaitingForUserInput(false)
+      }
+    }
+  }, [selectedSong, currentNoteIndex, playNote])
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const note = NOTES.find(n => n.key === e.key)
+      if (note) {
+        handleNotePlay(note.note, note.freq)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [handleNotePlay])
+
+  const playSong = useCallback(() => {
+    if (selectedSong) {
+      setIsPlaying(true)
+      setCurrentNoteIndex(-1)
+      setWaitingForUserInput(false)
+      const songNotes = SONGS[selectedSong as keyof typeof SONGS]
+      
+      const playNoteWithDelay = (index: number) => {
+        if (index < songNotes.length) {
+          setCurrentNoteIndex(index)
+          const noteObj = NOTES.find(n => n.note === songNotes[index])
+          if (noteObj) {
+            playNote(noteObj.freq)
+            if (isGuidedMode) {
+              setWaitingForUserInput(true)
+            } else {
+              timeoutIdRef.current = window.setTimeout(() => playNoteWithDelay(index + 1), 625)
+            }
+          }
+        } else {
+          setIsPlaying(false)
+          setCurrentNoteIndex(-1)
+          setWaitingForUserInput(false)
+        }
+      }
+
+      playNoteWithDelay(0)
+    }
+  }, [selectedSong, playNote, isGuidedMode])
+
+  const stopSong = useCallback(() => {
+    if (timeoutIdRef.current) {
+      clearTimeout(timeoutIdRef.current)
+    }
+    setIsPlaying(false)
+    setCurrentNoteIndex(-1)
+    setActiveNotes(new Map())
+    setWaitingForUserInput(false)
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (timeoutIdRef.current) {
+        clearTimeout(timeoutIdRef.current)
+      }
+    }
+  }, [])
+
+  const handlePlaySong = useCallback(() => {
+    if (selectedSong) {
+      stopSong()
+      playSong()
+    }
+  }, [selectedSong, playSong, stopSong])
+
+  const renderSongNotes = (songNotes: string[]) => {
+    const rows = []
+    for (let i = 0; i < songNotes.length; i += 12) {
+      rows.push(songNotes.slice(i, i + 12))
+    }
+
+    return rows.map((row, rowIndex) => (
+      <div key={rowIndex} className="flex justify-center space-x-1 mb-2">
+        {row.map((note, index) => (
+          <span
+            key={index}
+            className={`inline-block w-7 h-7 text-center text-xl leading-7 ${
+              rowIndex * 12 + index === currentNoteIndex 
+                ? 'bg-red-500 text-white ring-4 ring-red-600' 
+                : 'bg-gray-200'
+            } rounded`}
+          >
+            {NOTES_TO_NUMBERS[note]}
+          </span>
+        ))}
+      </div>
+    ))
+  }
+
+  return (
+    <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100 p-4 sm:p-8">
+      <h1 className="text-3xl font-bold mb-8">八音鋼琴鍵盤</h1>
+      <div className="mb-4 flex items-center space-x-4">
+        <Select onValueChange={setSelectedSong}>
+          <SelectTrigger className="w-[180px]">
+            <SelectValue placeholder="選擇歌曲" />
+          </SelectTrigger>
+          <SelectContent>
+            {Object.keys(SONGS).map((song) => (
+              <SelectItem key={song} value={song}>
+                {song}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Button onClick={handlePlaySong} disabled={!selectedSong || isPlaying}>
+          {isPlaying ? '播放中...' : '播放'}
+        </Button>
+        <Button onClick={stopSong} disabled={!isPlaying}>
+          停止
+        </Button>
+        <Button onClick={() => setIsGuidedMode(!isGuidedMode)}>
+          {isGuidedMode ? '退出引導模式' : '進入引導模式'}
+        </Button>
+      </div>
+      {selectedSong && (
+        <div className="mb-4 p-2 bg-white rounded-lg shadow-md w-full max-w-3xl">
+          {renderSongNotes(SONGS[selectedSong as keyof typeof SONGS])}
+        </div>
+      )}
+      <div className="flex flex-wrap justify-center gap-2 w-full max-w-7xl">
+        {NOTES.map(({ note, freq, key, color }) => (
+          <button
+            key={note}
+            className={`w-[10vw] h-[30vw] sm:w-[8vw] sm:h-[24vw] md:w-[6vw] md:h-[18vw] lg:w-[5vw] lg:h-[15vw] xl:w-20 xl:h-56 rounded-b-lg focus:outline-none transition-colors ${color} ${
+              activeNotes.has(note)
+                ? `bg-black text-white opacity-${Math.min(100, activeNotes.get(note)! * 25)}`
+                : isGuidedMode && waitingForUserInput && selectedSong && SONGS[selectedSong as keyof typeof SONGS][currentNoteIndex] === note
+                ? 'ring-4 ring-red-600'
+                : 'hover:opacity-90'
+            }`}
+            onMouseDown={() => handleNotePlay(note, freq)}
+            onTouchStart={() => handleNotePlay(note, freq)}
+          >
+            <div className="flex flex-col items-center justify-end h-full pb-4">
+              <span className="text-[2vw] sm:text-[1.5vw] md:text-xl font-bold">{note}</span>
+              <span className="text-[4vw] sm:text-[3vw] md:text-4xl lg:text-5xl mt-2 font-bold">{key}</span>
+            </div>
+          </button>
+        ))}
+      </div>
+      <p className="mt-8 text-gray-600">
+        使用鍵盤數字鍵 1-8 來彈奏
+      </p>
+    </div>
+  )
+}
+
